@@ -2,10 +2,8 @@ import * as cdk from '@aws-cdk/core';
 import * as ec2 from "@aws-cdk/aws-ec2"; // Allows working with EC2 and VPC resources
 import * as iam from "@aws-cdk/aws-iam"; // Allows working with IAM resources
 import * as rds from "@aws-cdk/aws-rds"; // Allows working with RDS resources
-// Allows working with ALB resources
-import * as elbv2 from "@aws-cdk/aws-elasticloadbalancingv2";
-// Allows working with ALB target groups
-import * as elbv2tg from "@aws-cdk/aws-elasticloadbalancingv2-targets";
+import * as elbv2 from "@aws-cdk/aws-elasticloadbalancingv2"; // Allows working with ALB resources
+import * as elbv2tg from "@aws-cdk/aws-elasticloadbalancingv2-targets"; // Allows working with ALB target groups
 
 export class Ec2CdkStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
@@ -35,7 +33,6 @@ export class Ec2CdkStack extends cdk.Stack {
       value: `aws ssm get-parameter --name /ec2/keypair/${key.getAtt('KeyPairId')} --region ${this.region} --with-decryption --query Parameter.Value --output text`,
     })
     
-
     // Security group for the EC2 instance
     const securityGroup = new ec2.SecurityGroup(this, "SecurityGroup", {
       vpc,
@@ -62,6 +59,7 @@ export class Ec2CdkStack extends cdk.Stack {
     // Create the EC2 instance using the Security Group, AMI, and KeyPair defined.
     const bation_ec2 = new ec2.Instance(this, "BationEC2", {
       vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.T2,
         ec2.InstanceSize.MICRO
@@ -70,6 +68,14 @@ export class Ec2CdkStack extends cdk.Stack {
       securityGroup: securityGroup,
       keyName: key.keyName,
       role: role,
+    });
+
+    // Elasitc IP for the EC2 instance
+    const eip = new ec2.CfnEIP(this, "EIP")
+    // Attach the Elastic IP to the EC2 instance
+    new ec2.CfnEIPAssociation(this, "EIPAssociation", {
+      allocationId: eip.attrAllocationId,
+      instanceId: bation_ec2.instanceId,
     });
 
     /////////////////////////////////
@@ -89,20 +95,22 @@ export class Ec2CdkStack extends cdk.Stack {
     // create EC2 instance
     const web_ec2 = new ec2.Instance(this, "Web-EC2", {
       vpc: vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_NAT },
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.T2,
         ec2.InstanceSize.MICRO
       ),
       machineImage: ami,
-      securityGroup: securityGroup,
       keyName: key.keyName,
       role: instanceProfile,
     });
 
     // create RDS instance
     const rdsInstance = new rds.DatabaseInstance(this, "RDS", {
-      engine: rds.DatabaseInstanceEngine.mysql({ version: rds.MysqlEngineVersion.VER_8_0_21, }),
+      engine: rds.DatabaseInstanceEngine.mysql({ version: rds.MysqlEngineVersion.VER_8_0_28, }),
       vpc: vpc,
+      // rds instance type
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T2, ec2.InstanceSize.MICRO),
     });
 
     // create ALB
@@ -117,5 +125,9 @@ export class Ec2CdkStack extends cdk.Stack {
         targets: [new elbv2tg.InstanceIdTarget(web_ec2.instanceId)],
         healthCheck: { path: "/index.html" }
     });
+
+    // Define Connections
+    web_ec2.connections.allowFrom(alb, ec2.Port.tcp(80));
+    rdsInstance.connections.allowFrom(web_ec2, ec2.Port.tcp(3306));
   }
 }
