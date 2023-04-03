@@ -1,24 +1,27 @@
 import * as cdk from '@aws-cdk/core';
 import * as ec2 from "@aws-cdk/aws-ec2"; // Allows working with EC2 and VPC resources
 import * as iam from "@aws-cdk/aws-iam"; // Allows working with IAM resources
+import * as rds from "@aws-cdk/aws-rds"; // Allows working with RDS resources
+// Allows working with ALB resources
+import * as elbv2 from "@aws-cdk/aws-elasticloadbalancingv2";
+// Allows working with ALB target groups
+import * as elbv2tg from "@aws-cdk/aws-elasticloadbalancingv2-targets";
 
 export class Ec2CdkStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
-
-    // set instance profile to use ssm
-    const instanceProfile = new iam.Role(this, "ec2_profile", {
-      assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      description: "for instance profile",
-      managedPolicies: [
-          iam.ManagedPolicy.fromAwsManagedPolicyName("CloudWatchAgentServerPolicy"),
-          iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore"),
-      ],
-    });
-
     // VPC
     const vpc = new ec2.Vpc(this, "Web-VPC", {
       cidr: "10.0.0.0/16",
+    });
+    // VPC Endpoint
+    new ec2.InterfaceVpcEndpoint(this, "ssm_endpoint", {
+      vpc: vpc,
+      service: new ec2.InterfaceVpcEndpointAwsService("ssm")
+    });
+    new ec2.InterfaceVpcEndpoint(this, "ssmmessage_endpoint", {
+      vpc: vpc,
+      service: new ec2.InterfaceVpcEndpointAwsService("ssmmessages")
     });
 
     // Create a key pair to be used with this EC2 Instance
@@ -27,7 +30,7 @@ export class Ec2CdkStack extends cdk.Stack {
     });
     // Delete the key pair when the stack is deleted
     key.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
-    // キーペア取得コマンドアウトプット
+    // Output the command to get the private key
     new cdk.CfnOutput(this, 'GetSSHKeyCommand', {
       value: `aws ssm get-parameter --name /ec2/keypair/${key.getAtt('KeyPairId')} --region ${this.region} --with-decryption --query Parameter.Value --output text`,
     })
@@ -57,7 +60,7 @@ export class Ec2CdkStack extends cdk.Stack {
     });
 
     // Create the EC2 instance using the Security Group, AMI, and KeyPair defined.
-    const ec2Instance = new ec2.Instance(this, "Instance", {
+    const bation_ec2 = new ec2.Instance(this, "BationEC2", {
       vpc,
       instanceType: ec2.InstanceType.of(
         ec2.InstanceClass.T2,
@@ -67,6 +70,52 @@ export class Ec2CdkStack extends cdk.Stack {
       securityGroup: securityGroup,
       keyName: key.keyName,
       role: role,
+    });
+
+    /////////////////////////////////
+    // ALB to EC2 to RDS Connection
+    /////////////////////////////////
+
+    // set instance profile to use ssm
+    const instanceProfile = new iam.Role(this, "ec2_profile", {
+      assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+      description: "for instance profile",
+      managedPolicies: [
+          iam.ManagedPolicy.fromAwsManagedPolicyName("CloudWatchAgentServerPolicy"),
+          iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore"),
+      ],
+    });
+
+    // create EC2 instance
+    const web_ec2 = new ec2.Instance(this, "Web-EC2", {
+      vpc: vpc,
+      instanceType: ec2.InstanceType.of(
+        ec2.InstanceClass.T2,
+        ec2.InstanceSize.MICRO
+      ),
+      machineImage: ami,
+      securityGroup: securityGroup,
+      keyName: key.keyName,
+      role: instanceProfile,
+    });
+
+    // create RDS instance
+    const rdsInstance = new rds.DatabaseInstance(this, "RDS", {
+      engine: rds.DatabaseInstanceEngine.mysql({ version: rds.MysqlEngineVersion.VER_8_0_21, }),
+      vpc: vpc,
+    });
+
+    // create ALB
+    const alb = new elbv2.ApplicationLoadBalancer(this, "ALB", {
+      vpc: vpc,
+      internetFacing: true,
+    });
+    // listener rule
+    const listener = alb.addListener("listener", { port: 80 });
+    listener.addTargets('target', {
+        port: 80,
+        targets: [new elbv2tg.InstanceIdTarget(web_ec2.instanceId)],
+        healthCheck: { path: "/index.html" }
     });
   }
 }
