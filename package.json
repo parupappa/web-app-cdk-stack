@@ -21,7 +21,10 @@
   },
   "dependencies": {
     "@aws-cdk/aws-ec2": "^1.198.1",
+    "@aws-cdk/aws-elasticloadbalancingv2": "^1.198.1",
+    "@aws-cdk/aws-elasticloadbalancingv2-targets": "^1.198.1",
     "@aws-cdk/aws-iam": "^1.198.1",
+    "@aws-cdk/aws-rds": "^1.198.1",
     "@aws-cdk/aws-s3-assets": "^1.198.1",
     "aws-cdk-lib": "2.72.1",
     "cdk-ec2-key-pair": "^3.3.1",
